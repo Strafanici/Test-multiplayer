@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SyncTest Live</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tone.js per segnali acustici sintetizzati -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <!-- Font Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            touch-action: manipulation;
+        }
+        /* Effetto flash/pulse visivo alla ricezione di un Ping */
+        @keyframes neonFlash {
+            0% { background-color: rgba(34, 211, 238, 0.92); transform: scale(1.02); }
+            50% { background-color: rgba(217, 70, 239, 0.85); transform: scale(1); }
+            100% { background-color: transparent; transform: scale(1); }
+        }
+        .animate-neon-flash {
+            animation: neonFlash 0.85s ease-out;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col justify-between select-none">
+
+    <!-- Overlay per effetto visivo del Ping ricevuto -->
+    <div id="ping-overlay" class="fixed inset-0 pointer-events-none z-50 transition-opacity duration-300 opacity-0 flex items-center justify-center bg-cyan-500/90 backdrop-blur-md">
+        <div class="bg-slate-950/95 text-white px-8 py-6 rounded-3xl shadow-2xl border-2 border-cyan-400 text-center transform scale-105">
+            <div class="text-5xl mb-2 animate-bounce">⚡</div>
+            <h2 class="text-2xl font-black tracking-wide uppercase bg-gradient-to-r from-cyan-400 via-fuchsia-400 to-amber-400 bg-clip-text text-transparent">
+                Segnale Ricevuto!
+            </h2>
+            <p id="ping-sender-text" class="text-xs font-semibold text-slate-300 mt-1.5">Dall'altro dispositivo</p>
+        </div>
+    </div>
+
+    <!-- Header Fisso -->
+    <header class="bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 py-3.5 sticky top-0 z-40 shadow-lg">
+        <div class="max-w-md mx-auto flex items-center justify-between">
+            <h1 class="font-black text-xl tracking-tight bg-gradient-to-r from-cyan-400 via-fuchsia-500 to-amber-400 bg-clip-text text-transparent">
+                SyncTest Live
+            </h1>
+            <!-- Indicatore Stato Firebase in tempo reale -->
+            <div id="connection-badge" class="flex items-center space-x-2 bg-slate-950 px-3 py-1.5 rounded-full border border-slate-800 shadow-inner">
+                <span id="status-dot" class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+                <span id="status-text" class="text-xs font-bold text-slate-300">Connessione...</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Contenuto Principale -->
+    <main class="flex-grow max-w-md w-full mx-auto p-4 flex flex-col justify-center">
+
+        <!-- Avviso Diagnostica / Errore Database (Visibile solo in caso di problemi) -->
+        <div id="db-error-banner" class="hidden mb-4 bg-rose-950/80 border-2 border-rose-500/70 rounded-2xl p-4 shadow-xl space-y-2">
+            <div class="flex items-center space-x-2 text-rose-400 font-black text-sm">
+                <span>⚠️</span>
+                <span id="db-error-title">Errore Realtime Database</span>
+            </div>
+            <p id="db-error-desc" class="text-xs text-rose-200 leading-relaxed">
+                Verifica di aver attivato <strong>Realtime Database</strong> in <em>Modalità di test</em> nella console Firebase. Se hai scelto un server europeo, verifica che il <code>databaseURL</code> corrisponda.
+            </p>
+        </div>
+
+        <!-- SCHERMATA 1: Connessione Stanza -->
+        <section id="login-section" class="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-6">
+            <div class="text-center space-y-1.5">
+                <h2 class="text-2xl font-black text-white">Collega Dispositivi</h2>
+                <p class="text-xs text-slate-400">
+                    Inserisci lo stesso codice (es. <span class="text-cyan-400 font-bold">xy01</span>) su entrambi gli smartphone.
+                </p>
+            </div>
+
+            <div class="space-y-4">
+                <input 
+                    type="text" 
+                    id="room-input" 
+                    placeholder="xy01" 
+                    maxlength="12"
+                    autocomplete="off"
+                    autocapitalize="none"
+                    class="w-full bg-slate-950 border-2 border-slate-800 focus:border-cyan-400 rounded-2xl px-4 py-4 text-center text-3xl font-black tracking-widest lowercase text-white placeholder-slate-700 focus:outline-none transition-colors shadow-inner"
+                >
+
+                <div id="login-error" class="hidden bg-rose-500/10 border border-rose-500/40 text-rose-400 text-xs font-semibold px-4 py-2.5 rounded-xl text-center">
+                    Inserisci un codice stanza valido.
+                </div>
+
+                <button 
+                    id="connect-btn" 
+                    class="w-full bg-gradient-to-r from-cyan-500 via-blue-600 to-fuchsia-600 hover:from-cyan-400 hover:to-fuchsia-500 text-white font-black text-lg py-4 rounded-2xl shadow-lg shadow-cyan-500/20 active:scale-[0.98] transition-all"
+                >
+                    Connetti / Crea Stanza
+                </button>
+            </div>
+
+            <div class="text-center pt-1">
+                <span class="text-[11px] font-mono text-slate-500">ID Dispositivo: <strong id="device-id-display" class="text-slate-400">---</strong></span>
+            </div>
+        </section>
+
+        <!-- SCHERMATA 2: Pannello di Controllo Sincronizzato -->
+        <section id="dashboard-section" class="hidden space-y-4 pb-4">
+            
+            <!-- Stanza Attiva & Pulsante Esci -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl px-4 py-3 flex items-center justify-between shadow-lg">
+                <div class="flex items-center space-x-3">
+                    <span id="active-room-code" class="text-3xl font-black tracking-wider lowercase bg-gradient-to-r from-cyan-400 to-fuchsia-400 bg-clip-text text-transparent">
+                        ----
+                    </span>
+                    <button id="copy-code-btn" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold px-2.5 py-1.5 rounded-xl active:scale-95 transition">
+                        Copia
+                    </button>
+                </div>
+                <button id="disconnect-btn" class="bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wide active:scale-95 transition">
+                    Esci
+                </button>
+            </div>
+
+            <!-- 1. PULSANTE PING / SEGNALE -->
+            <button id="ping-btn" class="w-full bg-gradient-to-r from-cyan-400 via-fuchsia-500 to-amber-400 text-slate-950 font-black text-xl py-5 px-6 rounded-3xl shadow-xl shadow-fuchsia-500/25 active:scale-95 transition-transform flex items-center justify-center space-x-3">
+                <span class="text-2xl">⚡</span>
+                <span>Invia Ping / Segnale</span>
+            </button>
+
+            <!-- 2. SELETTORE COLORI SINCRONIZZATO -->
+            <div id="shared-color-card" class="bg-slate-900 border-2 border-slate-800 rounded-3xl p-4 shadow-xl transition-all duration-300 space-y-3.5">
+                <div id="shared-color-banner" class="w-full h-16 rounded-2xl bg-slate-950/70 border border-white/10 flex items-center justify-center transition-colors duration-300">
+                    <span id="shared-color-text" class="font-black text-base tracking-wider uppercase text-slate-300">
+                        Tema Neutro
+                    </span>
+                </div>
+
+                <!-- 4 Pulsanti Colorati Neon/Vivaci -->
+                <div class="grid grid-cols-4 gap-2.5">
+                    <button data-color="cyan" class="color-btn h-14 rounded-2xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-black text-xs shadow-lg shadow-cyan-500/20 active:scale-90 transition-transform">
+                        Ciano
+                    </button>
+                    <button data-color="magenta" class="color-btn h-14 rounded-2xl bg-fuchsia-500 hover:bg-fuchsia-400 text-white font-black text-xs shadow-lg shadow-fuchsia-500/20 active:scale-90 transition-transform">
+                        Magenta
+                    </button>
+                    <button data-color="lime" class="color-btn h-14 rounded-2xl bg-lime-400 hover:bg-lime-300 text-slate-950 font-black text-xs shadow-lg shadow-lime-500/20 active:scale-90 transition-transform">
+                        Lime
+                    </button>
+                    <button data-color="orange" class="color-btn h-14 rounded-2xl bg-orange-500 hover:bg-orange-400 text-white font-black text-xs shadow-lg shadow-orange-500/20 active:scale-90 transition-transform">
+                        Arancio
+                    </button>
+                </div>
+            </div>
+
+            <!-- 3. CONTATORE CONDIVISO (- e + con valore grande al centro) -->
+            <div class="bg-slate-900 border border-slate-800 rounded-3xl p-4 shadow-xl">
+                <div class="flex items-center justify-between space-x-3">
+                    <button id="decrement-btn" class="w-20 h-20 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black text-4xl flex items-center justify-center shadow-md active:scale-90 transition-transform">
+                        −
+                    </button>
+                    
+                    <div class="flex-1 bg-slate-950 border border-slate-800 rounded-2xl h-20 flex items-center justify-center shadow-inner">
+                        <span id="shared-counter-value" class="text-5xl font-black font-mono bg-gradient-to-b from-white to-slate-400 bg-clip-text text-transparent">
+                            0
+                        </span>
+                    </div>
+
+                    <button id="increment-btn" class="w-20 h-20 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-black text-4xl flex items-center justify-center shadow-lg shadow-cyan-500/20 active:scale-90 transition-transform">
+                        +
+                    </button>
+                </div>
+            </div>
+
+            <!-- 4. LOG EVENTI IN TEMPO REALE -->
+            <div class="bg-slate-900 border border-slate-800 rounded-3xl p-3.5 shadow-xl">
+                <ul id="event-log-list" class="space-y-1.5 max-h-32 overflow-y-auto text-xs font-mono bg-slate-950 p-3 rounded-2xl border border-slate-800/80">
+                    <li class="text-slate-500">In attesa di eventi...</li>
+                </ul>
+            </div>
+
+        </section>
+    </main>
+
+    <!-- Toast Notification -->
+    <div id="toast-msg" class="fixed bottom-5 left-1/2 transform -translate-x-1/2 bg-slate-800 text-white text-xs font-bold px-4 py-2.5 rounded-full shadow-2xl border border-slate-700 opacity-0 pointer-events-none transition-opacity duration-300 z-50">
+        Messaggio
+    </div>
+
+    <!-- Firebase SDK 10.x Modulare via CDN -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+        import { getDatabase, ref, set, update, onValue, off, get, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+        // Configurazione Firebase fornita dall'utente
+        const firebaseConfig = {
+            apiKey: "AIzaSyBaFU936P6MUspydAj3oHH6-kvS6yZbA1A",
+            authDomain: "synctestapp.firebaseapp.com",
+            projectId: "synctestapp",
+            storageBucket: "synctestapp.firebasestorage.app",
+            messagingSenderId: "1027255842591",
+            appId: "1:1027255842591:web:058f0a638b3a6abbaa622a"
+        };
+
+        // Inizializzazione Firebase & Realtime Database
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        // Generazione ID univoco casuale per questo smartphone
+        const myDeviceId = 'DEV-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+        document.getElementById('device-id-display').textContent = myDeviceId;
+
+        // Riferimenti DOM
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const dbErrorBanner = document.getElementById('db-error-banner');
+        const dbErrorTitle = document.getElementById('db-error-title');
+        const dbErrorDesc = document.getElementById('db-error-desc');
+        const loginSection = document.getElementById('login-section');
+        const dashboardSection = document.getElementById('dashboard-section');
+        const roomInput = document.getElementById('room-input');
+        const connectBtn = document.getElementById('connect-btn');
+        const loginError = document.getElementById('login-error');
+
+        let currentRoomCode = null;
+        let currentRoomRef = null;
+        let lastHandledPingId = null;
+        let lastLogSignature = '';
+
+        // Mappa temi colore per la card sincronizzata
+        const colorThemes = {
+            neutral: {
+                card: 'bg-slate-900 border-slate-800',
+                banner: 'bg-slate-950/70 border-white/10 text-slate-300',
+                label: 'Tema Neutro'
+            },
+            cyan: {
+                card: 'bg-cyan-950/90 border-cyan-400 shadow-cyan-500/20',
+                banner: 'bg-cyan-400 border-cyan-200 text-slate-950',
+                label: 'CIANO ATTIVO'
+            },
+            magenta: {
+                card: 'bg-fuchsia-950/90 border-fuchsia-500 shadow-fuchsia-500/20',
+                banner: 'bg-fuchsia-500 border-fuchsia-300 text-white',
+                label: 'MAGENTA ATTIVO'
+            },
+            lime: {
+                card: 'bg-lime-950/90 border-lime-400 shadow-lime-500/20',
+                banner: 'bg-lime-400 border-lime-200 text-slate-950',
+                label: 'VERDE LIME ATTIVO'
+            },
+            orange: {
+                card: 'bg-orange-950/90 border-orange-500 shadow-orange-500/20',
+                banner: 'bg-orange-500 border-orange-300 text-white',
+                label: 'ARANCIO ATTIVO'
+            }
+        };
+
+        // Monitoraggio stato connessione Realtime Database (.info/connected)
+        const connectedRef = ref(db, '.info/connected');
+        onValue(connectedRef, (snap) => {
+            if (snap.val() === true) {
+                statusDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]';
+                statusText.textContent = currentRoomCode ? `Stanza: ${currentRoomCode}` : 'Pronto';
+                statusText.className = 'text-xs font-bold text-emerald-400';
+            } else {
+                statusDot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse';
+                statusText.textContent = 'Connessione...';
+                statusText.className = 'text-xs font-bold text-amber-300';
+            }
+        }, (error) => {
+            handleDatabaseError(error);
+        });
+
+        // Gestione chiara degli errori di permessi o URL database
+        function handleDatabaseError(error) {
+            console.error('Errore Firebase Realtime Database:', error);
+            statusDot.className = 'w-2.5 h-2.5 rounded-full bg-rose-500';
+            statusText.textContent = 'Errore DB';
+            statusText.className = 'text-xs font-bold text-rose-400';
+
+            dbErrorBanner.classList.remove('hidden');
+            if (error && error.code === 'PERMISSION_DENIED') {
+                dbErrorTitle.textContent = 'Permesso Negato (PERMISSION_DENIED)';
+                dbErrorDesc.innerHTML = 'Le regole del tuo Realtime Database bloccano l\'accesso. Vai nella console Firebase &gt; <strong>Realtime Database</strong> &gt; <strong>Regole</strong> e imposta <code>".read": true, ".write": true</code> (Modalità di test).';
+            } else {
+                dbErrorTitle.textContent = 'Database non raggiungibile';
+                dbErrorDesc.innerHTML = 'Assicurati di aver creato il <strong>Realtime Database</strong> nella console Firebase. Se hai scelto una regione europea (es. <em>europe-west1</em>), aggiungi <code>databaseURL</code> dentro <code>firebaseConfig</code>.';
+            }
+        }
+
+        // Toast notification
+        function showToast(msg) {
+            const toast = document.getElementById('toast-msg');
+            toast.textContent = msg;
+            toast.classList.remove('opacity-0');
+            setTimeout(() => toast.classList.add('opacity-0'), 2200);
+        }
+
+        // Segnale acustico sintetizzato con Tone.js
+        async function playPingSound() {
+            try {
+                if (Tone.context.state !== 'running') {
+                    await Tone.start();
+                }
+                const synth = new Tone.Synth({
+                    oscillator: { type: 'sine' },
+                    envelope: { attack: 0.01, decay: 0.15, sustain: 0.1, release: 0.3 }
+                }).toDestination();
+                const now = Tone.now();
+                synth.triggerAttackRelease("E5", "16n", now);
+                synth.triggerAttackRelease("B5", "8n", now + 0.1);
+            } catch (e) {
+                // Ignora se audio bloccato dal browser
+            }
+        }
+
+        // Attiva flash visivo, vibrazione e suono quando arriva un Ping
+        function triggerPingFeedback(senderId) {
+            const overlay = document.getElementById('ping-overlay');
+            const senderText = document.getElementById('ping-sender-text');
+            
+            senderText.textContent = senderId === myDeviceId 
+                ? `Inviato da questo telefono (${myDeviceId})` 
+                : `Segnale ricevuto da ${senderId}`;
+
+            overlay.classList.remove('opacity-0');
+            overlay.classList.add('animate-neon-flash');
+
+            if (navigator.vibrate) {
+                navigator.vibrate([250, 100, 250]);
+            }
+
+            playPingSound();
+
+            setTimeout(() => {
+                overlay.classList.add('opacity-0');
+                overlay.classList.remove('animate-neon-flash');
+            }, 1050);
+        }
+
+        // Aggiunge riga al log cronologico
+        function appendLog(text, timeStr, isPing = false) {
+            const list = document.getElementById('event-log-list');
+            if (list.children.length === 1 && list.children[0].textContent.includes('In attesa di eventi')) {
+                list.innerHTML = '';
+            }
+
+            const li = document.createElement('li');
+            li.className = `flex items-start space-x-2 py-1 border-b border-slate-900 last:border-0 ${isPing ? 'text-cyan-300 font-bold' : 'text-slate-300'}`;
+            li.innerHTML = `<span class="text-slate-500 shrink-0">[${timeStr}]</span><span>${text}</span>`;
+            list.prepend(li);
+
+            while (list.children.length > 12) {
+                list.removeChild(list.lastChild);
+            }
+        }
+
+        // Connessione / Creazione stanza su Realtime Database
+        async function connectToRoom(rawInput) {
+            // Normalizza in minuscolo e rimuove caratteri non validi
+            const cleanCode = rawInput.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+            if (!cleanCode) {
+                loginError.classList.remove('hidden');
+                return;
+            }
+            loginError.classList.add('hidden');
+            dbErrorBanner.classList.add('hidden');
+
+            connectBtn.disabled = true;
+            connectBtn.textContent = 'Connessione...';
+
+            const roomRef = ref(db, `rooms/${cleanCode}`);
+            const nowTime = new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+            try {
+                const snapshot = await get(roomRef);
+                if (!snapshot.exists()) {
+                    // Crea nuova stanza con valori iniziali
+                    await set(roomRef, {
+                        color: 'neutral',
+                        counter: 0,
+                        ping: null,
+                        lastAction: `${myDeviceId} ha creato la stanza`,
+                        lastActionTime: nowTime,
+                        updatedAt: Date.now()
+                    });
+                    lastHandledPingId = null;
+                } else {
+                    const existingData = snapshot.val();
+                    lastHandledPingId = existingData.ping ? existingData.ping.id : null;
+                    await update(roomRef, {
+                        lastAction: `${myDeviceId} si è connesso`,
+                        lastActionTime: nowTime,
+                        updatedAt: Date.now()
+                    });
+                }
+
+                currentRoomCode = cleanCode;
+                currentRoomRef = roomRef;
+
+                // Mostra pannello sincronizzato
+                document.getElementById('active-room-code').textContent = cleanCode;
+                loginSection.classList.add('hidden');
+                dashboardSection.classList.remove('hidden');
+                statusText.textContent = `Stanza: ${cleanCode}`;
+
+                // Sottoscrizione in tempo reale ai cambiamenti della stanza
+                onValue(roomRef, (snap) => {
+                    if (!snap.exists()) return;
+                    syncUI(snap.val());
+                }, (err) => {
+                    handleDatabaseError(err);
+                });
+
+            } catch (error) {
+                handleDatabaseError(error);
+            } finally {
+                connectBtn.disabled = false;
+                connectBtn.textContent = 'Connetti / Crea Stanza';
+            }
+        }
+
+        // Aggiorna UI quando arrivano dati dal Realtime Database
+        function syncUI(data) {
+            // 1. Aggiorna tema colore card
+            const themeKey = data.color && colorThemes[data.color] ? data.color : 'neutral';
+            const theme = colorThemes[themeKey];
+            const cardEl = document.getElementById('shared-color-card');
+            const bannerEl = document.getElementById('shared-color-banner');
+            const bannerText = document.getElementById('shared-color-text');
+
+            cardEl.className = `border-2 rounded-3xl p-4 shadow-xl transition-all duration-300 space-y-3.5 ${theme.card}`;
+            bannerEl.className = `w-full h-16 rounded-2xl border flex items-center justify-center transition-colors duration-300 ${theme.banner}`;
+            bannerText.textContent = theme.label;
+
+            // 2. Aggiorna contatore condiviso
+            document.getElementById('shared-counter-value').textContent = typeof data.counter === 'number' ? data.counter : 0;
+
+            // 3. Controlla nuovo Ping ricevuto
+            if (data.ping && data.ping.id && data.ping.id !== lastHandledPingId) {
+                lastHandledPingId = data.ping.id;
+                triggerPingFeedback(data.ping.sender);
+            }
+
+            // 4. Aggiorna log eventi
+            if (data.lastAction && data.lastActionTime) {
+                const sig = `${data.updatedAt}-${data.lastAction}`;
+                if (sig !== lastLogSignature) {
+                    lastLogSignature = sig;
+                    appendLog(data.lastAction, data.lastActionTime, data.lastAction.includes('PING'));
+                }
+            }
+        }
+
+        // Helper invio aggiornamento al Realtime Database
+        async function pushRoomUpdate(updates, actionLabel) {
+            if (!currentRoomRef) return;
+            const nowTime = new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            try {
+                await update(currentRoomRef, {
+                    ...updates,
+                    lastAction: `${myDeviceId}: ${actionLabel}`,
+                    lastActionTime: nowTime,
+                    updatedAt: Date.now()
+                });
+            } catch (error) {
+                handleDatabaseError(error);
+            }
+        }
+
+        // --- EVENT LISTENERS ---
+
+        // Connessione stanza
+        connectBtn.addEventListener('click', () => {
+            if (Tone.context.state !== 'running') Tone.start().catch(() => {});
+            connectToRoom(roomInput.value);
+        });
+
+        roomInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                connectBtn.click();
+            }
+        });
+
+        // Esci dalla stanza
+        document.getElementById('disconnect-btn').addEventListener('click', () => {
+            if (currentRoomRef) {
+                off(currentRoomRef);
+                currentRoomRef = null;
+            }
+            currentRoomCode = null;
+            lastLogSignature = '';
+            document.getElementById('event-log-list').innerHTML = '<li class="text-slate-500">In attesa di eventi...</li>';
+            dashboardSection.classList.add('hidden');
+            loginSection.classList.remove('hidden');
+            statusText.textContent = 'Pronto';
+        });
+
+        // Copia codice stanza
+        document.getElementById('copy-code-btn').addEventListener('click', () => {
+            if (!currentRoomCode) return;
+            const temp = document.createElement('input');
+            temp.value = currentRoomCode;
+            document.body.appendChild(temp);
+            temp.select();
+            document.execCommand('copy');
+            document.body.removeChild(temp);
+            showToast(`Codice "${currentRoomCode}" copiato!`);
+        });
+
+        // Pulsante Ping / Segnale
+        document.getElementById('ping-btn').addEventListener('click', () => {
+            const pingId = `${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+            pushRoomUpdate({
+                ping: {
+                    id: pingId,
+                    sender: myDeviceId,
+                    timestamp: Date.now()
+                }
+            }, 'ha inviato un PING ⚡');
+        });
+
+        // 4 Pulsanti Colore
+        document.querySelectorAll('.color-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const chosen = btn.getAttribute('data-color');
+                pushRoomUpdate({ color: chosen }, `colore ${chosen.toUpperCase()}`);
+            });
+        });
+
+        // Contatore + e - con transazione atomica
+        function changeCounter(delta) {
+            if (!currentRoomRef) return;
+            const counterRef = ref(db, `rooms/${currentRoomCode}/counter`);
+            runTransaction(counterRef, (currentVal) => {
+                return (currentVal || 0) + delta;
+            }).then((result) => {
+                if (result.committed) {
+                    pushRoomUpdate({}, `contatore a ${result.snapshot.val()}`);
+                }
+            }).catch(handleDatabaseError);
+        }
+
+        document.getElementById('increment-btn').addEventListener('click', () => changeCounter(1));
+        document.getElementById('decrement-btn').addEventListener('click', () => changeCounter(-1));
+    </script>
+</body>
+</html>
